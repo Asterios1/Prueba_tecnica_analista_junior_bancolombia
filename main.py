@@ -241,10 +241,13 @@ class BillingCalculator:
         """
         self.conn = sqlite3.connect(db_path)
         self.iva_rate = 0.19
-        
-    def load_data(self):
+    
+    def load_data(self, selected_months=None):
         """
         Cargar y preprocesar datos de la base de datos
+        
+        Args:
+            selected_months (list, optional): Meses a filtrar (1-12)
         
         Returns:
             pd.DataFrame: Cruzar y filtrar el dataframe
@@ -257,11 +260,18 @@ class BillingCalculator:
             # Convertir columna de fecha a fecha y hora
             df_api['date_api_call'] = pd.to_datetime(df_api['date_api_call'])
             
-            # Filtrar llamadas a la API para julio y agosto de 2024
-            df_api_filtered = df_api[
-                (df_api['date_api_call'].dt.year == 2024) & 
-                (df_api['date_api_call'].dt.month.isin([7, 8]))
-            ]
+            # Filtrar llamadas a la API por mes si se proporcionan meses
+            if selected_months:
+                df_api_filtered = df_api[
+                    (df_api['date_api_call'].dt.year == 2024) & 
+                    (df_api['date_api_call'].dt.month.isin(selected_months))
+                ]
+            else:
+                # Si no se proporcionan meses, usar julio y agosto por defecto
+                df_api_filtered = df_api[
+                    (df_api['date_api_call'].dt.year == 2024) & 
+                    (df_api['date_api_call'].dt.month.isin([7, 8]))
+                ]
             
             # Filtrar empresas activas
             df_commerce_active = df_commerce[df_commerce['commerce_status'] == "Active"]
@@ -362,22 +372,72 @@ class BillingCalculator:
         
         return total
     
-    def run_billing_process(self, export_path=None):
+    def run_billing_process(self, export_path=None, selected_months=None):
         """
         Ejecutar el proceso de facturación completo
         
         Args:
             export_path (str, optional): Ruta para exportar archivo Excel
+            selected_months (list, optional): Meses a analizar
         
         Returns:
             pd.DataFrame: Resumen de facturación
         """
         try:
-            # Cargar y procesar datos
-            df_merged = self.load_data()
+            # Cargar y procesar datos con los meses seleccionados
+            df_merged = self.load_data(selected_months)
             
             # Calcular facturación
             billing_summary = self.calculate_billing(df_merged)
+            
+            # Obtener fecha más reciente por comercio (para 'date_api_call')
+            fechas_por_comercio = df_merged.groupby('commerce_id')['date_api_call'].max()
+            
+            # Agregar columnas adicionales
+            extra_columns = df_merged.groupby('commerce_id')[['commerce_nit', 'commerce_email']].first()
+            
+            # Unir columnas adicionales al resumen de facturación
+            billing_summary = billing_summary.set_index('commerce_id').join(extra_columns).join(fechas_por_comercio).reset_index()
+            
+            # Convertir los meses numéricos a nombres de mes
+            if selected_months:
+                meses_nombres = [datetime(2024, mes, 1).strftime('%B') for mes in selected_months]
+                meses_str = ', '.join(meses_nombres)
+            else:
+                meses_nombres = ['Julio', 'Agosto']
+                meses_str = 'Julio, Agosto'
+            
+            # Reemplazar la fecha con los nombres de meses
+            billing_summary['date_api_call'] = meses_str
+            
+            # Renombrar columnas
+            billing_summary = billing_summary.rename(columns={
+                'date_api_call': 'Fecha', 
+                'commerce_name': 'Nombre', 
+                'commerce_nit': 'Nit', 
+                'total_a_cobrar_sin_iva': 'Valor_comision', 
+                'total_a_cobrar_con_iva': 'Valor_Total', 
+                'successful': 'Conseguidas', 
+                'failed': 'Falladas', 
+                'commerce_email': 'Correo'
+            })
+            
+            # Calcular IVA
+            billing_summary['Valor_iva'] = billing_summary['Valor_Total'] - billing_summary['Valor_comision']
+            
+            # Reordenar columnas en el orden especificado
+            columnas_ordenadas = [
+                'Fecha', 
+                'Nombre', 
+                'Nit', 
+                'Valor_comision', 
+                'Valor_iva', 
+                'Valor_Total', 
+                'Conseguidas', 
+                'Falladas', 
+                'Correo'
+            ]
+            billing_summary = billing_summary[columnas_ordenadas]
             
             # Registrar y visualizar resultados
             logging.info("\nBilling Summary:")
@@ -389,12 +449,20 @@ class BillingCalculator:
                 os.makedirs(os.path.dirname(export_path), exist_ok=True)
                 
                 # Formatear columnas numéricas
-                billing_summary['total_a_cobrar_sin_iva'] = billing_summary['total_a_cobrar_sin_iva'].round(2)
-                billing_summary['total_a_cobrar_con_iva'] = billing_summary['total_a_cobrar_con_iva'].round(2)
+                columnas_numericas = ['Valor_comision', 'Valor_iva', 'Valor_Total']
+                billing_summary[columnas_numericas] = billing_summary[columnas_numericas].round(2)
                 
                 # Exportar a Excel
-                billing_summary.to_excel(export_path, index=False, 
-                                         sheet_name='Resumen Facturación')
+                with pd.ExcelWriter(export_path) as writer:
+                    # Escribir el resumen de facturación
+                    billing_summary.to_excel(writer, index=False, sheet_name='Resumen Facturación')
+                    
+                    # Agregar una hoja con información de meses analizados
+                    info_meses = pd.DataFrame({
+                        'Información': ['Meses Analizados'],
+                        'Detalle': [meses_str]
+                    })
+                    info_meses.to_excel(writer, index=False, sheet_name='Información')
                 
                 logging.info(f"\n--- RESUMEN DE FACTURACIÓN EXPORTADO A: {export_path} ---")
             
@@ -495,6 +563,42 @@ def enviar_correo_excel(remitente, password, destinatarios, asunto, cuerpo, arch
         logging.error(f"Error inesperado al enviar correo: {e}")
         print(f"Error inesperado al enviar correo: {e}")
 
+def solicitar_meses():
+    """
+    Solicitar meses para el análisis
+    
+    Returns:
+        list: Lista de meses a analizar
+    """
+    while True:
+        try:
+            # Imprimir meses disponibles
+            print("\nMeses disponibles:")
+            for mes in range(1, 13):
+                print(f"{mes}: {datetime(2024, mes, 1).strftime('%B')}")
+            
+            # Solicitar entrada de meses
+            entrada_meses = input("\nIngrese los meses que desea analizar (separados por coma, ejemplo: 7,8): ").strip()
+            
+            # Convertir entrada a lista de meses
+            meses_seleccionados = [int(mes.strip()) for mes in entrada_meses.split(',')]
+            
+            # Validar meses
+            if all(1 <= mes <= 12 for mes in meses_seleccionados):
+                # Confirmar selección
+                print("\nMeses seleccionados:")
+                for mes in meses_seleccionados:
+                    print(datetime(2024, mes, 1).strftime('%B'))
+                
+                confirmacion = input("\n¿Son correctos estos meses? (s/n): ").lower()
+                if confirmacion == 's':
+                    return meses_seleccionados
+            else:
+                print("Por favor, ingrese números de mes válidos entre 1 y 12.")
+        
+        except ValueError:
+            print("Entrada inválida. Por favor, ingrese números de mes separados por coma.")
+
 def main():
     # Ruta de la base de datos SQLite
     DB_PATH = "Datos/database.sqlite"
@@ -504,17 +608,26 @@ def main():
     
     # Generar nombres de archivo con fecha actual
     fecha_actual = datetime.now().strftime("%Y-%m-%d")
-    ANALISIS_EXPORT_PATH = f"reportes/analisis_datos_{fecha_actual}.xlsx"
-    FACTURACION_EXPORT_PATH = f"reportes/resumen_facturacion_{fecha_actual}.xlsx"
     
     try:
+        # Solicitar meses para análisis
+        meses_seleccionados = solicitar_meses()
+        
+        # Nombres de archivos basados en meses seleccionados
+        meses_str = '_'.join(str(mes) for mes in meses_seleccionados)
+        ANALISIS_EXPORT_PATH = f"reportes/analisis_datos_{meses_str}_{fecha_actual}.xlsx"
+        FACTURACION_EXPORT_PATH = f"reportes/resumen_facturacion_{meses_str}_{fecha_actual}.xlsx"
+        
         # Inicializar y ejecutar análisis de datos
         analyzer = DataAnalyzer(DB_PATH)
         resultados_analisis = analyzer.perform_exploratory_data_analysis(export_path=ANALISIS_EXPORT_PATH)
         
-        # Inicializar y ejecutar cálculo de facturación
+        # Inicializar y ejecutar cálculo de facturación con meses seleccionados
         calculator = BillingCalculator(DB_PATH)
-        billing_results = calculator.run_billing_process(export_path=FACTURACION_EXPORT_PATH)
+        billing_results = calculator.run_billing_process(
+            export_path=FACTURACION_EXPORT_PATH, 
+            selected_months=meses_seleccionados
+        )
         
         # Solicitar correos de destinatarios
         destinatarios = solicitar_correos()
@@ -522,8 +635,8 @@ def main():
         # Configuración de correo
         remitente = ""  # Se solicitará al momento de enviar
         password = ""   # Se solicitará al momento de enviar
-        asunto = "Reportes ETL"
-        cuerpo = "Adjunto los reportes de análisis y facturación generados por el proceso ETL."
+        asunto = f"Reportes ETL - Meses {meses_str}"
+        cuerpo = f"Adjunto los reportes de análisis y facturación generados para los meses {meses_str}."
         
         # Enviar reportes por correo
         enviar_correo_excel(
