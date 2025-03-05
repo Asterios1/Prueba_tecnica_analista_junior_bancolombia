@@ -13,11 +13,19 @@ from email import encoders
 from datetime import datetime
 
 def setup_logging():
-    """Configurar logging con rotación de archivos"""
+    """
+    Configura el sistema de logging del programa.
+    
+    Se crean dos handlers:
+      - Un handler que guarda los logs en un archivo con rotación (máximo 1 MB por archivo y 5 respaldos).
+      - Un handler que muestra los mensajes de log en la consola.
+    
+    Esto permite tener registros persistentes y visualización en tiempo real de la ejecución.
+    """
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
     
-    # Crear directorio de logs si no existe
+    # Crear directorio para los archivos de log si no existe
     os.makedirs('logs', exist_ok=True)
     
     # Configurar handler de archivo con rotación
@@ -43,12 +51,20 @@ def setup_logging():
 setup_logging()
 
 class DataAnalyzer:
+    """
+    Clase encargada de cargar datos desde una base de datos SQLite y realizar un análisis exploratorio.
+    
+    Atributos principales:
+      - conn: Conexión a la base de datos.
+      - df_api: DataFrame con los registros de llamadas a la API.
+      - df_commerce: DataFrame con los registros de comercios.
+    """
     def __init__(self, db_path):
         """
-        Inicializar analizador de datos
+        Inicializa el objeto DataAnalyzer y establece la conexión a la base de datos SQLite.
         
         Args:
-            db_path (str): Ruta a la base de datos SQLite
+            db_path (str): Ruta al archivo de la base de datos SQLite.
         """
         try:
             self.conn = sqlite3.connect(db_path)
@@ -59,24 +75,28 @@ class DataAnalyzer:
             raise
         
     def __del__(self):
-        """Asegurar que la conexión se cierre"""
+        """
+        Destructor que se asegura de cerrar la conexión a la base de datos al finalizar el uso del objeto.
+        """
         if hasattr(self, 'conn'):
             self.conn.close()
             logging.info("Conexión a la base de datos cerrada")
             
     def load_data(self):
         """
-        Cargar datos de la base de datos
+        Carga los datos de las tablas 'apicall' y 'commerce' desde la base de datos.
+        
+        Se realiza la conversión de la columna 'date_api_call' a tipo datetime.
         
         Returns:
-            tuple: DataFrames de API calls y comercios
+            tuple: (DataFrame de API calls, DataFrame de comercios)
         """
         try:
-            # Cargar tablas
+            # Cargar datos de ambas tablas
             self.df_api = pd.read_sql("SELECT * FROM apicall", self.conn)
             self.df_commerce = pd.read_sql("SELECT * FROM commerce", self.conn)
             
-            # Convertir columna de fecha a datetime
+            # Convertir la columna de fecha a formato datetime para facilitar análisis posteriores
             self.df_api['date_api_call'] = pd.to_datetime(self.df_api['date_api_call'])
             
             return self.df_api, self.df_commerce
@@ -87,24 +107,26 @@ class DataAnalyzer:
     
     def perform_exploratory_data_analysis(self, export_path=None):
         """
-        Realizar análisis exploratorio de datos
+        Realiza un análisis exploratorio de los datos cargados, generando estadísticas descriptivas,
+        detección de valores faltantes, distribuciones y series temporales. Además, crea visualizaciones
+        y exporta los resultados a un archivo Excel.
         
         Args:
-            export_path (str, optional): Ruta para exportar resultados
+            export_path (str, optional): Ruta del archivo Excel donde se exportarán los resultados.
         
         Returns:
-            dict: Resultados del análisis
+            dict: Diccionario con los resultados del análisis.
         """
         if self.df_api is None or self.df_commerce is None:
             self.load_data()
         
-        # Crear directorio de análisis
+        # Asegurar que existe el directorio para guardar resultados del análisis
         os.makedirs('analisis_resultados', exist_ok=True)
         
         # Resultados del análisis
         analisis_resultados = {}
         
-        # 1. Información Básica
+        # 1. Información básica de los datos
         analisis_resultados['info_basica'] = {
             'API Calls': {
                 'Total Registros': len(self.df_api),
@@ -116,35 +138,35 @@ class DataAnalyzer:
             }
         }
         
-        # 2. Estadísticas Descriptivas
+        # 2. Estadísticas descriptivas de cada tabla
         analisis_resultados['estadisticas_descriptivas'] = {
             'API Calls': self.df_api.describe(include='all').to_dict(),
             'Commerce': self.df_commerce.describe(include='all').to_dict()
         }
         
-        # 3. Valores Faltantes
+        # 3. Conteo de valores faltantes en cada columna
         analisis_resultados['valores_faltantes'] = {
             'API Calls': self.df_api.isnull().sum().to_dict(),
             'Commerce': self.df_commerce.isnull().sum().to_dict()
         }
         
-        # 4. Distribución de llamadas por estatus
+        # 4. Distribución de llamadas por estado (por ejemplo, Successful, Failed, etc.)
         status_counts = self.df_api['ask_status'].value_counts()
         analisis_resultados['distribucion_llamadas'] = status_counts.to_dict()
         
-        # 5. Distribución de comercios por estado
+        # 5. Distribución de comercios según su estado
         commerce_status_counts = self.df_commerce['commerce_status'].value_counts()
         analisis_resultados['distribucion_comercios'] = commerce_status_counts.to_dict()
         
-        # 6. Análisis de series temporales
+        # 6. Análisis de series temporales: agrupación de llamadas por mes
         self.df_api['month'] = self.df_api['date_api_call'].dt.to_period('M')
         monthly_calls = self.df_api.groupby('month')['ask_status'].count()
         analisis_resultados['llamadas_mensuales'] = monthly_calls.to_dict()
         
-        # Visualizaciones
+        # Generar gráficos y visualizaciones a partir de los datos
         self._create_visualizations()
         
-        # Exportar resultados a Excel si se proporciona ruta
+        # Exportar el análisis a Excel si se ha proporcionado una ruta de exportación
         if export_path:
             self._export_analysis_to_excel(analisis_resultados, export_path)
         
@@ -152,7 +174,12 @@ class DataAnalyzer:
     
     def _create_visualizations(self):
         """
-        Crear visualizaciones para el análisis exploratorio
+        Genera y guarda gráficos representativos del análisis exploratorio:
+          - Gráfico de barras para la distribución de llamadas por estado.
+          - Gráfico de pastel para la distribución de comercios por estado.
+          - Gráfico de línea para la serie temporal de llamadas mensuales.
+        
+        Los gráficos se guardan en el directorio 'analisis_resultados'.
         """
         try:
             plt.style.use('default')
@@ -160,7 +187,7 @@ class DataAnalyzer:
             # Crear directorio de resultados si no existe
             os.makedirs('analisis_resultados', exist_ok=True)
             
-            # 1. Distribución de llamadas por estado
+            # 1. Gráfico de distribución de llamadas por estado
             plt.figure(figsize=(10, 6))
             self.df_api['ask_status'].value_counts().plot(kind='bar')
             plt.title('Distribución de Llamadas por Estado')
@@ -170,7 +197,7 @@ class DataAnalyzer:
             plt.savefig('analisis_resultados/distribucion_llamadas.png')
             plt.close()
             
-            # 2. Distribución de comercios por estado
+            # 2. Gráfico de distribución de comercios por estado (pie chart)
             plt.figure(figsize=(10, 6))
             self.df_commerce['commerce_status'].value_counts().plot(kind='pie', autopct='%1.1f%%')
             plt.title('Distribución de Comercios por Estado')
@@ -179,7 +206,7 @@ class DataAnalyzer:
             plt.savefig('analisis_resultados/distribucion_comercios.png')
             plt.close()
             
-            # 3. Llamadas mensuales
+            # 3. Gráfico de línea para llamadas mensuales
             plt.figure(figsize=(12, 6))
             monthly_calls = self.df_api.groupby(self.df_api['date_api_call'].dt.to_period('M'))['ask_status'].count()
             monthly_calls.plot(kind='line', marker='o')
@@ -196,11 +223,19 @@ class DataAnalyzer:
     
     def _export_analysis_to_excel(self, analisis_resultados, export_path):
         """
-        Exportar resultados del análisis a Excel
+        Exporta los resultados del análisis exploratorio a un archivo Excel.
+        
+        Cada hoja del archivo contiene una parte distinta del análisis:
+          - Información básica
+          - Estadísticas descriptivas
+          - Valores faltantes
+          - Distribución de llamadas
+          - Distribución de comercios
+          - Llamadas mensuales
         
         Args:
-            analisis_resultados (dict): Resultados del análisis
-            export_path (str): Ruta para exportar
+            analisis_resultados (dict): Diccionario con los resultados del análisis.
+            export_path (str): Ruta donde se guardará el archivo Excel.
         """
         try:
             # Crear un escritor de Excel
@@ -232,25 +267,37 @@ class DataAnalyzer:
             logging.error(f"Error exportando análisis a Excel: {e}")
 
 class BillingCalculator:
+    """
+    Clase encargada de calcular la facturación de cada empresa según reglas contractuales específicas.
+    
+    Se conecta a la base de datos, carga y filtra los datos, y aplica distintos criterios de facturación
+    dependiendo de la empresa (por ejemplo, descuentos, escalas de precios, IVA, etc.).
+    """
     def __init__(self, db_path):
         """
-        Initialize the billing calculator with database connection
+        Inicializa el objeto BillingCalculator y establece la conexión a la base de datos.
         
         Args:
-            db_path (str): Path to the SQLite database
+            db_path (str): Ruta al archivo de la base de datos SQLite.
         """
         self.conn = sqlite3.connect(db_path)
-        self.iva_rate = 0.19
+        self.iva_rate = 0.19 # Tasa de IVA a aplicar en el cálculo de facturación
     
     def load_data(self, selected_months=None):
         """
-        Cargar y preprocesar datos de la base de datos
+        Carga y preprocesa los datos de las tablas 'apicall' y 'commerce'.
+        
+        Realiza las siguientes tareas:
+          - Convierte la columna de fecha en la tabla de API calls a tipo datetime.
+          - Filtra las llamadas del año 2024 y, opcionalmente, por los meses seleccionados.
+          - Filtra los comercios que están activos.
+          - Cruza ambos DataFrames para obtener la información combinada.
         
         Args:
-            selected_months (list, optional): Meses a filtrar (1-12)
+            selected_months (list, optional): Lista de meses (números 1-12) a analizar.
         
         Returns:
-            pd.DataFrame: Cruzar y filtrar el dataframe
+            pd.DataFrame: DataFrame resultante de cruzar y filtrar los datos.
         """
         try:
             # Cargar tablas
@@ -287,13 +334,16 @@ class BillingCalculator:
     
     def calculate_billing(self, df_merged):
         """
-        Calcular la facturación de cada empresa en función de las condiciones específicas del contrato
+        Calcula la facturación de cada empresa a partir de los datos combinados.
+        
+        Se agrupa la información por comercio y se cuentan las llamadas exitosas y fallidas.
+        Luego se aplican las reglas de facturación específicas para cada empresa.
         
         Args:
-            df_merged (pd.DataFrame): Resumen de facturación con cargos totales
+            df_merged (pd.DataFrame): DataFrame con los datos combinados de API calls y comercios.
         
         Returns:
-            pd.DataFrame: Billing summary with total charges
+            pd.DataFrame: Resumen de facturación con cargos totales (sin y con IVA).
         """
         # Agrupar por commerce_id y commerce_name
         grouped = df_merged.groupby(["commerce_id", "commerce_name"]).agg(
@@ -309,21 +359,32 @@ class BillingCalculator:
     
     def _calculate_company_billing_base(self, row):
         """
-        Calcular facturación base sin IVA ni descuentos
+        Calcula la facturación base sin aplicar descuentos ni IVA.
+        
+        Invoca el método _calculate_company_billing con flags para omitir descuentos e IVA.
+        
+        Args:
+            row (pd.Series): Fila con los datos de facturación de la empresa.
+        
+        Returns:
+            float: Importe base calculado.
         """
         return self._calculate_company_billing(row, apply_discount=False, apply_iva=False)
     
     def _calculate_company_billing(self, row, apply_discount=True, apply_iva=True):
         """
-        Calcular la facturación de una empresa individual con reglas contractuales específicas
+        Calcula la facturación total de una empresa aplicando reglas contractuales.
+        
+        Para cada empresa se define una tarifa según el número de llamadas exitosas y se aplican
+        descuentos en función de la cantidad de llamadas fallidas. Finalmente, se suma el IVA si se solicita.
         
         Args:
-            row (pd.Series): Fila que contiene los detalles de la empresa
-            apply_discount (bool): Marca para aplicar descuentos
-            apply_iva (bool): Marca para aplicar IVA
+            row (pd.Series): Fila con los datos de facturación (nombre, llamadas exitosas y fallidas).
+            apply_discount (bool): Indica si se deben aplicar descuentos.
+            apply_iva (bool): Indica si se debe incluir el IVA en el cálculo final.
         
         Returns:
-            float: Importe total de la facturación
+            float: Importe total de la facturación.
         """
         base = 0  # Importe base sin IVA ni descuentos
         company_name = row['commerce_name'].strip()
@@ -374,14 +435,19 @@ class BillingCalculator:
     
     def run_billing_process(self, export_path=None, selected_months=None):
         """
-        Ejecutar el proceso de facturación completo
+        Ejecuta el proceso completo de facturación:
+          - Carga y filtra los datos según los meses seleccionados.
+          - Calcula la facturación para cada comercio.
+          - Añade información adicional (NIT, correo y última fecha de llamada).
+          - Exporta el resumen a un archivo Excel si se especifica.
+          - Registra el resumen en el log y lo muestra por pantalla.
         
         Args:
-            export_path (str, optional): Ruta para exportar archivo Excel
-            selected_months (list, optional): Meses a analizar
+            export_path (str, optional): Ruta para exportar el resumen de facturación a Excel.
+            selected_months (list, optional): Meses (1-12) a analizar.
         
         Returns:
-            pd.DataFrame: Resumen de facturación
+            pd.DataFrame: DataFrame con el resumen de facturación.
         """
         try:
             # Cargar y procesar datos con los meses seleccionados
@@ -477,10 +543,12 @@ class BillingCalculator:
 
 def solicitar_correos():
     """
-    Solicitar correos de los destinatarios
+    Solicita al usuario que ingrese las direcciones de correo electrónico de los destinatarios.
+    
+    Se realiza una validación básica (presencia de '@' y '.') y se permite la confirmación de la lista ingresada.
     
     Returns:
-        list: Lista de correos electrónicos
+        list: Lista de correos electrónicos ingresados y confirmados.
     """
     while True:
         try:
@@ -513,10 +581,17 @@ def solicitar_correos():
 
 def enviar_correo_excel(remitente, password, destinatarios, asunto, cuerpo, archivos):
     """
-    Enviar correo con múltiples archivos Excel
+    Envía un correo electrónico con archivos adjuntos (en este caso, archivos Excel).
+    
+    Configura una conexión SMTP con Gmail, adjunta cada archivo (verificando su existencia) y maneja posibles errores de autenticación o envío.
     
     Args:
-        archivos (list): Lista de rutas de archivos Excel
+        remitente (str): Dirección de correo del remitente.
+        password (str): Contraseña del remitente (se solicita de forma segura si no se proporciona).
+        destinatarios (list): Lista de direcciones de correo destinatarias.
+        asunto (str): Asunto del correo.
+        cuerpo (str): Cuerpo del mensaje en texto plano.
+        archivos (list): Lista de rutas a los archivos Excel a adjuntar.
     """
     try:
         msg = MIMEMultipart()
@@ -565,10 +640,12 @@ def enviar_correo_excel(remitente, password, destinatarios, asunto, cuerpo, arch
 
 def solicitar_meses():
     """
-    Solicitar meses para el análisis
+    Solicita al usuario que seleccione los meses que desea analizar.
+    
+    Muestra una lista numerada de los meses (1-12) con sus nombres y permite al usuario ingresar varios meses separados por comas.
     
     Returns:
-        list: Lista de meses a analizar
+        list: Lista de meses (en formato numérico) seleccionados y confirmados por el usuario.
     """
     while True:
         try:
@@ -600,6 +677,16 @@ def solicitar_meses():
             print("Entrada inválida. Por favor, ingrese números de mes separados por coma.")
 
 def main():
+    """
+    Función principal del programa.
+    
+    Realiza los siguientes pasos:
+      1. Define la ruta de la base de datos y crea el directorio para reportes.
+      2. Solicita al usuario los meses a analizar y configura los nombres de archivo de salida.
+      3. Ejecuta el análisis exploratorio y el cálculo de facturación.
+      4. Solicita los correos de los destinatarios.
+      5. Envía los reportes generados por correo electrónico.
+    """
     # Ruta de la base de datos SQLite
     DB_PATH = "Datos/database.sqlite"
     
