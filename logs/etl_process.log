@@ -1,0 +1,10 @@
+2025-03-04 21:08:14,715 - root - INFO - 
+--- VISUALIZACIONES GUARDADAS EN 'analisis_resultados/' ---
+2025-03-04 21:08:15,087 - root - INFO - 
+--- ANÁLISIS EXPORTADO A: reportes/analisis_datos_2025-03-04.xlsx ---
+2025-03-04 21:08:19,067 - root - INFO - 
+Billing Summary:
+2025-03-04 21:08:19,091 - root - INFO - 
+--- RESUMEN DE FACTURACIÓN EXPORTADO A: reportes/resumen_facturacion_2025-03-04.xlsx ---
+2025-03-04 21:09:19,964 - root - INFO - Correo enviado con éxito
+2025-03-04 21:09:19,969 - root - INFO - Conexión a la base de datos cerrada
